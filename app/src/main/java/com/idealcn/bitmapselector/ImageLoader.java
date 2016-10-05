@@ -13,6 +13,7 @@ import android.util.LruCache;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 
+import java.lang.reflect.Field;
 import java.util.LinkedList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,6 +56,7 @@ public class ImageLoader {
     private Type mType = Type.LIFO;
 
     private Semaphore semaphore = new Semaphore(0);
+    private Semaphore mSemaphoreThreadPool;
 
     public enum Type {
         LIFO, FIFO;
@@ -68,9 +70,9 @@ public class ImageLoader {
     }
 
 
-    public synchronized static ImageLoader getLoader() {
+    public synchronized static ImageLoader getLoader(int threadCount,Type type) {
         if (loader == null)
-            loader = new ImageLoader(DEFAULT_THREAD_COUNT, Type.LIFO);
+            loader = new ImageLoader(threadCount, type);
         return loader;
     }
 
@@ -85,6 +87,7 @@ public class ImageLoader {
         mThreadPool = Executors.newFixedThreadPool(threadCount);
         mTaskQueue = new LinkedList<>();
         mType = type;
+        mSemaphoreThreadPool = new Semaphore(threadCount);
 
         //后台轮询线程
         mPoolThread = new Thread() {
@@ -97,6 +100,11 @@ public class ImageLoader {
                     public void handleMessage(Message msg) {
                         super.handleMessage(msg);
                         mThreadPool.execute(getTask());
+                        try {
+                            mSemaphoreThreadPool.acquire();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
                     }
                 };
                 semaphore.release();
@@ -104,6 +112,8 @@ public class ImageLoader {
             }
         };
         mPoolThread.start();
+
+
     }
 
     private Runnable getTask() {
@@ -135,7 +145,7 @@ public class ImageLoader {
         Bitmap bitmap = getBitmapFromCache(path);
         if (bitmap != null) {
             refreshBitmap(path, view, bitmap);
-        }else {
+        } else {
             addTasks(new Runnable() {
                 @Override
                 public void run() {
@@ -144,6 +154,7 @@ public class ImageLoader {
                     Bitmap bitmap = decodeBitmap(path, imageSize.width, imageSize.height);
                     mLruCache.put(path, bitmap);
                     refreshBitmap(path, view, bitmap);
+                    mSemaphoreThreadPool.release();
                 }
 
             });
@@ -199,7 +210,7 @@ public class ImageLoader {
             height = lp.height;
         }
         if (height <= 0) {
-            height = view.getMaxHeight();
+            height = getImageViewFieldValue(view,"mMaxHeight");
         }
         if (height <= 0) {
             height = metrics.heightPixels;
@@ -208,7 +219,7 @@ public class ImageLoader {
         if (width <= 0)
             width = lp.width;
         if (width <= 0)
-            width = view.getMaxWidth();
+            width = getImageViewFieldValue(view,"mMaxWidth");
         if (width <= 0)
             width = metrics.widthPixels;
         imageSize.height = height;
@@ -216,9 +227,30 @@ public class ImageLoader {
         return imageSize;
     }
 
+    private static int getImageViewFieldValue(Object object, String fieldName) {
+        int value = 0;
+
+        try {
+            Field field = ImageView.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+
+            int fieldValue = field.getInt(object);
+            if (fieldValue > 0 && fieldValue < Integer.MAX_VALUE) {
+                value = fieldValue;
+            }
+
+        } catch (NoSuchFieldException e) {
+            e.printStackTrace();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
+        return value;
+    }
+
+
     private synchronized void addTasks(Runnable task) {
         mTaskQueue.add(task);
-        if (mPoolThreadHandler==null)
+        if (mPoolThreadHandler == null)
             try {
                 semaphore.acquire();
             } catch (InterruptedException e) {
