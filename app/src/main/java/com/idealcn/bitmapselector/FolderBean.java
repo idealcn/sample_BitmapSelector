@@ -1,10 +1,12 @@
 package com.idealcn.bitmapselector;
 
+import java.io.Serializable;
+
 /**
  * author:idealcn
  * date:2016/10/5 20:56
  */
-public class FolderBean {
+public class FolderBean implements Serializable{
     private String dir;
     private String firstImagePath;
     private String name;
